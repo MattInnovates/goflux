@@ -120,7 +120,10 @@ func (m *Middleware) HandleChallenge(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(challenge)
+	if err := json.NewEncoder(w).Encode(challenge); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to encode challenge: %v", err), http.StatusInternalServerError)
+		return
+	}
 }
 
 // OptionalAuth wraps a handler to optionally accept authentication
