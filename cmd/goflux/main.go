@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"sync"
 
 	"github.com/0xRepo-Source/goflux/pkg/chunk"
 	"github.com/0xRepo-Source/goflux/pkg/config"
@@ -22,7 +23,7 @@ func main() {
 	flag.Parse()
 
 	if *version {
-		fmt.Println("goflux version: 0.4.1")
+		fmt.Println("goflux version: 0.4.2")
 		return
 	}
 
@@ -153,12 +154,18 @@ func doPut(client *transport.HTTPClient, chunker *chunk.Chunker, localPath, remo
 		}),
 	)
 
-	// Stream and upload chunks
+	// Concurrent upload with worker pool
+	type chunkWork struct {
+		chunkID int
+		data    []byte
+	}
+
+	// Pre-read all chunks that need to be uploaded
+	chunksToProcess := make([]chunkWork, 0, totalToUpload)
 	buffer := make([]byte, chunker.Size)
 	chunkID := 0
 
 	for {
-		// Read chunk from file
 		n, err := file.Read(buffer)
 		if err == io.EOF {
 			break
@@ -168,30 +175,78 @@ func doPut(client *transport.HTTPClient, chunker *chunk.Chunker, localPath, remo
 			return fmt.Errorf("failed to read chunk: %w", err)
 		}
 
-		// Only upload if needed
+		// Store chunk if it needs uploading
 		if chunksToUpload[chunkID] {
-			// Calculate checksum for this chunk
-			chunkData := buffer[:n]
-			hash := sha256.Sum256(chunkData)
-			checksum := hex.EncodeToString(hash[:])
-
-			// Upload chunk
-			uploadData := transport.ChunkData{
-				Path:     remotePath,
-				ChunkID:  chunkID,
-				Data:     chunkData,
-				Checksum: checksum,
-				Total:    numChunks,
-			}
-
-			if err := client.UploadChunk(uploadData); err != nil {
-				bar.Close()
-				return fmt.Errorf("failed to upload chunk %d: %w", chunkID, err)
-			}
-			_ = bar.Add(1)
+			chunkData := make([]byte, n)
+			copy(chunkData, buffer[:n])
+			chunksToProcess = append(chunksToProcess, chunkWork{
+				chunkID: chunkID,
+				data:    chunkData,
+			})
 		}
-
 		chunkID++
+	}
+
+	// Set up concurrent upload workers
+	const maxConcurrency = 10
+	workChan := make(chan chunkWork, len(chunksToProcess))
+	errChan := make(chan error, len(chunksToProcess))
+	var wg sync.WaitGroup
+	var progressMu sync.Mutex
+
+	// Start worker goroutines
+	for i := 0; i < maxConcurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for work := range workChan {
+				// Calculate checksum for this chunk
+				hash := sha256.Sum256(work.data)
+				checksum := hex.EncodeToString(hash[:])
+
+				// Upload chunk
+				uploadData := transport.ChunkData{
+					Path:     remotePath,
+					ChunkID:  work.chunkID,
+					Data:     work.data,
+					Checksum: checksum,
+					Total:    numChunks,
+				}
+
+				if err := client.UploadChunk(uploadData); err != nil {
+					errChan <- fmt.Errorf("failed to upload chunk %d: %w", work.chunkID, err)
+					return
+				}
+
+				// Update progress bar thread-safely
+				progressMu.Lock()
+				_ = bar.Add(1)
+				progressMu.Unlock()
+			}
+		}()
+	}
+
+	// Send work to workers
+	go func() {
+		defer close(workChan)
+		for _, work := range chunksToProcess {
+			workChan <- work
+		}
+	}()
+
+	// Wait for all uploads to complete
+	wg.Wait()
+	close(errChan)
+
+	// Check for any upload errors
+	var uploadErrors []error
+	for err := range errChan {
+		uploadErrors = append(uploadErrors, err)
+	}
+
+	if len(uploadErrors) > 0 {
+		bar.Close()
+		return fmt.Errorf("upload failed with %d errors: %v", len(uploadErrors), uploadErrors[0])
 	}
 
 	_ = bar.Finish()

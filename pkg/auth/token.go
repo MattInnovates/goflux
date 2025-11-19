@@ -85,6 +85,22 @@ func (ts *TokenStore) Reload() error {
 	return ts.Load()
 }
 
+// GetTokenByID retrieves a token by its ID (for challenge-response auth)
+func (ts *TokenStore) GetTokenByID(tokenID string) *Token {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+
+	for _, token := range ts.tokens {
+		if token.ID == tokenID {
+			if token.Revoked || time.Now().After(token.ExpiresAt) {
+				return nil
+			}
+			return token
+		}
+	}
+	return nil
+}
+
 // Validate checks if a token is valid and returns the associated user and permissions
 func (ts *TokenStore) Validate(tokenStr string) (string, []string, error) {
 	// Hash the provided token

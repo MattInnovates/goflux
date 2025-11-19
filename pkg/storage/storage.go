@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Storage is an interface for storing and retrieving files.
@@ -27,8 +28,42 @@ func NewLocal(root string) (*Local, error) {
 	return &Local{Root: root}, nil
 }
 
+// sanitizePath ensures the path cannot escape the root directory
+func (l *Local) sanitizePath(path string) (string, error) {
+	// Clean the path to resolve . and .. components
+	cleanPath := filepath.Clean(path)
+
+	// Remove leading slash to make it relative
+	cleanPath = strings.TrimPrefix(cleanPath, "/")
+	cleanPath = strings.TrimPrefix(cleanPath, "\\")
+
+	// Join with root and clean again
+	fullPath := filepath.Join(l.Root, cleanPath)
+
+	// Get absolute paths to compare
+	absRoot, err := filepath.Abs(l.Root)
+	if err != nil {
+		return "", fmt.Errorf("failed to get absolute root path: %w", err)
+	}
+
+	absPath, err := filepath.Abs(fullPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to get absolute file path: %w", err)
+	}
+
+	// Ensure the resolved path is still within the root directory
+	if !strings.HasPrefix(absPath, absRoot+string(filepath.Separator)) && absPath != absRoot {
+		return "", fmt.Errorf("path traversal attempt detected: %s", path)
+	}
+
+	return fullPath, nil
+}
+
 func (l *Local) Put(path string, data []byte) error {
-	fullPath := filepath.Join(l.Root, path)
+	fullPath, err := l.sanitizePath(path)
+	if err != nil {
+		return fmt.Errorf("invalid path: %w", err)
+	}
 	dir := filepath.Dir(fullPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
@@ -37,18 +72,27 @@ func (l *Local) Put(path string, data []byte) error {
 }
 
 func (l *Local) Get(path string) ([]byte, error) {
-	fullPath := filepath.Join(l.Root, path)
+	fullPath, err := l.sanitizePath(path)
+	if err != nil {
+		return nil, fmt.Errorf("invalid path: %w", err)
+	}
 	return os.ReadFile(fullPath)
 }
 
 func (l *Local) Exists(path string) bool {
-	fullPath := filepath.Join(l.Root, path)
-	_, err := os.Stat(fullPath)
+	fullPath, err := l.sanitizePath(path)
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(fullPath)
 	return err == nil
 }
 
 func (l *Local) List(path string) ([]string, error) {
-	fullPath := filepath.Join(l.Root, path)
+	fullPath, err := l.sanitizePath(path)
+	if err != nil {
+		return nil, fmt.Errorf("invalid path: %w", err)
+	}
 	entries, err := os.ReadDir(fullPath)
 	if err != nil {
 		return nil, err

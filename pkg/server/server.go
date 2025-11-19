@@ -56,11 +56,14 @@ func (s *Server) Start(addr string, webRoot string) error {
 
 	// Register handlers with authentication if enabled
 	if s.authMiddle != nil {
+		// Challenge-response endpoint (no auth required to get challenge)
+		mux.HandleFunc("/auth/challenge", s.authMiddle.HandleChallenge)
+
 		mux.HandleFunc("/upload", s.authMiddle.RequireAuth("upload", s.handleUpload))
 		mux.HandleFunc("/upload/status", s.authMiddle.RequireAuth("upload", s.handleUploadStatus))
 		mux.HandleFunc("/download", s.authMiddle.RequireAuth("download", s.handleDownload))
 		mux.HandleFunc("/list", s.authMiddle.RequireAuth("list", s.handleList))
-		fmt.Println("Authentication enabled")
+		fmt.Println("Authentication enabled (challenge-response supported)")
 	} else {
 		mux.HandleFunc("/upload", s.handleUpload)
 		mux.HandleFunc("/upload/status", s.handleUploadStatus)

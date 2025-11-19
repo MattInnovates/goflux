@@ -16,6 +16,13 @@
         <header>
             <h1>goflux</h1>
             <p class="subtitle">Fast, resumable file transfer</p>
+            <div class="auth-section">
+                <input type="text" id="tokenIdInput" placeholder="Token ID (e.g., tok_abc123def456)" autocomplete="off" />
+                <input type="password" id="tokenInput" placeholder="Full token (64 hex characters)" autocomplete="off" />
+                <button id="saveToken" class="btn-auth">Save Token</button>
+                <button id="clearToken" class="btn-auth btn-danger">Clear Token</button>
+                <span id="authStatus"></span>
+            </div>
         </header>
 
         <div class="main-content">

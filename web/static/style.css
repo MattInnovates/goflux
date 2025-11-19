@@ -58,6 +58,78 @@ header h1 {
     font-weight: 400;
 }
 
+.auth-section {
+    margin-top: 16px;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+#tokenIdInput {
+    flex: 0 0 220px;
+    padding: 10px 14px;
+    background: var(--surface);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 4px;
+    color: var(--text);
+    font-size: 0.9em;
+    font-family: 'Roboto Mono', monospace;
+}
+
+#tokenInput {
+    flex: 1;
+    min-width: 300px;
+    padding: 10px 14px;
+    background: var(--surface);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 4px;
+    color: var(--text);
+    font-size: 0.9em;
+    font-family: 'Roboto Mono', monospace;
+}
+
+#tokenInput::placeholder,
+#tokenIdInput::placeholder {
+    color: var(--text-secondary);
+}
+
+.btn-auth {
+    padding: 10px 20px;
+    background: var(--primary);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: background 0.2s;
+}
+
+.btn-auth:hover {
+    background: #1976D2;
+}
+
+.btn-danger {
+    background: #D32F2F;
+}
+
+.btn-danger:hover {
+    background: #C62828;
+}
+
+#authStatus {
+    font-size: 0.85em;
+    color: var(--text-secondary);
+}
+
+#authStatus.success {
+    color: #4CAF50;
+}
+
+#authStatus.error {
+    color: #F44336;
+}
+
 .main-content {
     flex: 1;
     display: grid;

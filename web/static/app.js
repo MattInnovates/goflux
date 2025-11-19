@@ -1,12 +1,191 @@
 // Global state
 let currentPath = '/';
 const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
+let authTokenId = localStorage.getItem('goflux_token_id') || '';
+let authToken = localStorage.getItem('goflux_token') || '';
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
+    setupAuth();
     setupUpload();
     loadFiles(currentPath);
 });
+
+// Authentication functionality
+function setupAuth() {
+    const tokenIdInput = document.getElementById('tokenIdInput');
+    const tokenInput = document.getElementById('tokenInput');
+    const saveTokenBtn = document.getElementById('saveToken');
+    const clearTokenBtn = document.getElementById('clearToken');
+    const authStatus = document.getElementById('authStatus');
+
+    // Load saved token (mask it for security)
+    if (authToken && authTokenId) {
+        tokenIdInput.placeholder = authTokenId;
+        tokenInput.placeholder = '••••••••••••••••••••••••••••••••';
+        authStatus.textContent = '✓ Token active (challenge-response enabled)';
+        authStatus.className = 'success';
+    }
+
+    // Save token
+    saveTokenBtn.addEventListener('click', () => {
+        const tokenId = tokenIdInput.value.trim();
+        const token = tokenInput.value.trim();
+        
+        if (token && tokenId) {
+            // Validate token ID format
+            if (!/^tok_[a-fA-F0-9]{12}$/.test(tokenId)) {
+                authStatus.textContent = '⚠ Token ID should be format: tok_xxxxxxxxxxxx';
+                authStatus.className = 'error';
+                return;
+            }
+            
+            // Validate token format (64 hex chars)
+            if (!/^[a-fA-F0-9]{64}$/.test(token)) {
+                authStatus.textContent = '⚠ Token should be 64 hexadecimal characters';
+                authStatus.className = 'error';
+                return;
+            }
+            
+            authTokenId = tokenId;
+            authToken = token;
+            localStorage.setItem('goflux_token_id', tokenId);
+            localStorage.setItem('goflux_token', token);
+            
+            // Clear inputs and mask for security
+            tokenIdInput.value = '';
+            tokenIdInput.placeholder = tokenId;
+            tokenInput.value = '';
+            tokenInput.placeholder = '••••••••••••••••••••••••••••••••';
+            
+            authStatus.textContent = '✓ Token saved (challenge-response enabled)';
+            authStatus.className = 'success';
+            
+            // Reload files with new token
+            loadFiles(currentPath);
+        } else {
+            authStatus.textContent = 'Please enter both Token ID and Token';
+            authStatus.className = 'error';
+        }
+    });
+
+    // Clear token
+    clearTokenBtn.addEventListener('click', () => {
+        if (confirm('Are you sure you want to clear the saved token?')) {
+            authTokenId = '';
+            authToken = '';
+            localStorage.removeItem('goflux_token_id');
+            localStorage.removeItem('goflux_token');
+            tokenIdInput.value = '';
+            tokenIdInput.placeholder = 'Token ID (e.g., tok_abc123def456)';
+            tokenInput.value = '';
+            tokenInput.placeholder = 'Full token (64 hex characters)';
+            authStatus.textContent = 'Token cleared';
+            authStatus.className = '';
+            
+            // Reload files (will fail auth now)
+            loadFiles(currentPath);
+        }
+    });
+
+    // Allow Enter key to save token
+    tokenInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            saveTokenBtn.click();
+        }
+    });
+    
+    tokenIdInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            tokenInput.focus();
+        }
+    });
+}
+
+// Helper to compute SHA-256 hash
+async function computeSHA256(message) {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(message);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    return Array.from(new Uint8Array(hashBuffer))
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('');
+}
+
+// Helper to compute HMAC-SHA256
+async function computeHMAC(key, message) {
+    const encoder = new TextEncoder();
+    const keyData = encoder.encode(key);
+    const messageData = encoder.encode(message);
+    
+    // Import key for HMAC
+    const cryptoKey = await crypto.subtle.importKey(
+        'raw',
+        keyData,
+        { name: 'HMAC', hash: 'SHA-256' },
+        false,
+        ['sign']
+    );
+    
+    // Compute HMAC
+    const signature = await crypto.subtle.sign('HMAC', cryptoKey, messageData);
+    
+    // Convert to hex string
+    return Array.from(new Uint8Array(signature))
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('');
+}
+
+// Helper to get challenge-response auth header
+async function getChallengeAuthHeader() {
+    if (!authToken || !authTokenId) {
+        console.log('No token or token ID available');
+        return null;
+    }
+    
+    try {
+        console.log('Getting challenge from server...');
+        // Step 1: Get challenge from server
+        const challengeResp = await fetch('/auth/challenge');
+        if (!challengeResp.ok) {
+            console.error('Failed to get challenge:', challengeResp.status);
+            return null;
+        }
+        
+        const challenge = await challengeResp.json();
+        const nonce = challenge.nonce;
+        console.log('Got nonce:', nonce.substring(0, 16) + '...');
+        
+        // Step 2: Hash the token (same as server stores)
+        const tokenHash = await computeSHA256(authToken);
+        console.log('Token hash:', tokenHash.substring(0, 16) + '...');
+        
+        // Step 3: Compute HMAC-SHA256(token_hash, nonce)
+        const response = await computeHMAC(tokenHash, nonce);
+        console.log('HMAC response:', response.substring(0, 16) + '...');
+        
+        // Step 4: Return challenge-response header
+        // Format: "Challenge <response>;<nonce>;<token_id>"
+        const authHeader = `Challenge ${response};${nonce};${authTokenId}`;
+        console.log('Auth header format: Challenge <response>;<nonce>;<token_id>');
+        return { 'Authorization': authHeader };
+        
+    } catch (error) {
+        console.error('Challenge-response auth failed:', error);
+        return null;
+    }
+}
+
+// Helper to add auth header to requests (old method - kept for compatibility)
+function getAuthHeaders() {
+    const headers = {
+        'Content-Type': 'application/json'
+    };
+    if (authToken) {
+        headers['Authorization'] = `Bearer ${authToken}`;
+    }
+    return headers;
+}
 
 // Upload functionality
 function setupUpload() {
@@ -79,11 +258,16 @@ async function uploadFile(file) {
                 total: chunks.length
             };
 
+            // Use challenge-response auth
+            const authHeaders = authToken ? await getChallengeAuthHeader() : {};
+            const headers = {
+                'Content-Type': 'application/json',
+                ...(authHeaders || {})
+            };
+
             const response = await fetch('/upload', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers: headers,
                 body: JSON.stringify(chunkData)
             });
 
@@ -168,9 +352,17 @@ async function loadFiles(path) {
     fileList.innerHTML = '<div class="loading">Loading files...</div>';
 
     try {
-        const response = await fetch(`/list?path=${encodeURIComponent(path)}`);
+        // Use challenge-response auth if token available
+        const authHeaders = authToken ? await getChallengeAuthHeader() : {};
+
+        const response = await fetch(`/list?path=${encodeURIComponent(path)}`, {
+            headers: authHeaders || {}
+        });
         
         if (!response.ok) {
+            if (response.status === 401) {
+                throw new Error('Authentication required - please enter your token above');
+            }
             throw new Error('Failed to load files');
         }
 
@@ -219,9 +411,17 @@ async function downloadFile(fileName) {
     const filePath = currentPath + (currentPath.endsWith('/') ? '' : '/') + fileName;
     
     try {
-        const response = await fetch(`/download?path=${encodeURIComponent(filePath)}`);
+        // Use challenge-response auth
+        const authHeaders = authToken ? await getChallengeAuthHeader() : {};
+
+        const response = await fetch(`/download?path=${encodeURIComponent(filePath)}`, {
+            headers: authHeaders || {}
+        });
         
         if (!response.ok) {
+            if (response.status === 401) {
+                throw new Error('Authentication required');
+            }
             throw new Error('Download failed');
         }
 
